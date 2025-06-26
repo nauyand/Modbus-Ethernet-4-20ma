@@ -58,7 +58,7 @@ void loadConfig() {
 
   for (int i = 0; i < 6; i++) {
     EEPROM.get(addr, modbusAddr[i]); addr += sizeof(int);
-    if (modbusAddr[i] < 1 || modbusAddr[i] > 125) modbusAddr[i] = i + 1;
+    if (modbusAddr[i] < 1 || modbusAddr[i] > 9999) modbusAddr[i] = i + 1;
   }
 }
 
@@ -74,9 +74,36 @@ void setup() {
   mb.config(mac, staticIP);
   server.begin();
 
-  for (int i = 0; i < 20; i++) {
-    //mb.addCoil(i);
-    mb.addHreg(i);
+  mb.addHreg(0);
+  int regsToAdd[6];    // Array untuk simpan address yang akan didaftarkan ke Modbus (maksimal 6 CH)
+  int regCount = 0;    // Hitung berapa banyak register unik
+
+  for (int i = 0; i < 6; i++) {
+    int addr = modbusAddr[i];  // Modbus pakai address 1-based, sedangkan mb.Hreg() pakai 0-based
+
+    // Skip kalau address negatif (invalid)
+    if (addr < 0) continue;
+
+    // Cek apakah addr sudah pernah disimpan
+    bool exists = false;
+    for (int j = 0; j < regCount; j++) {
+      if (regsToAdd[j] == addr) {
+        exists = true;
+        break;
+      }
+    }
+
+    // Kalau belum ada dan masih muat, simpan
+    if (!exists && regCount < 6) {
+      regsToAdd[regCount++] = addr;
+    }
+  }
+
+  // Tambahkan hanya register yang unik ke Modbus
+  for (int i = 0; i < regCount; i++) {
+    mb.addHreg(regsToAdd[i]);
+    Serial.print("Modbus Register Added: ");
+    Serial.println(regsToAdd[i]);
   }
 
   Serial.print("Server IP: ");
@@ -96,7 +123,7 @@ void loop() {
       int raw = analogRead(i);
       float scaled = (raw - adcMin[i]) * (scaleMax[i] - scaleMin[i]) / (adcMax[i] - adcMin[i]) + scaleMin[i];
       lastScaled[i] = scaled;
-      mb.Hreg(modbusAddr[i]-1, (int)scaled);
+      mb.Hreg(modbusAddr[i], (int)scaled);
 
       Serial.print("CH "); Serial.print(i + 1);
       Serial.print(" | Raw: "); Serial.print(raw);
@@ -105,7 +132,7 @@ void loop() {
       Serial.print(" | ScaleMax: "); Serial.print(scaleMax[i], 2);
       Serial.print(" | ADC Min: "); Serial.print(adcMin[i]);
       Serial.print(" | ADC Max: "); Serial.print(adcMax[i]);
-      Serial.print(" | Modbus Addr: "); Serial.println(modbusAddr[i]-1);
+      Serial.print(" | Modbus Addr: "); Serial.println(modbusAddr[i] + 1);
     }
     Serial.print(staticIP);
     Serial.println();
@@ -148,7 +175,8 @@ if (req.indexOf("GET /restart") >= 0) {
     client.println(F("<input type='submit' value='Save'></form>"));
     client.print(F("<p>Current IP: ")); client.print(staticIP); client.println(F("</p>"));
     client.println(F("<a href='/'><button>Kembali</button></a></body></html>"));
-    client.stop(); return;
+    client.stop(); 
+    return;
   }
 
   // Save New IP
@@ -166,7 +194,10 @@ if (req.indexOf("GET /restart") >= 0) {
           client.print(F("<p>New IP: ")); client.print(staticIP); client.println(F("</p>"));
           client.println(F("<p><b>Restart Controller to apply new IP.</b></p>"));
           client.println(F("<a href='/'><button>Kembali</button></a></body></html>"));
-          client.stop(); return;
+          client.stop(); 
+          delay(300);  // beri waktu sebelum reset
+          softwareReset();
+          return;
         }
       }
     }
@@ -185,8 +216,8 @@ if (req.indexOf("GET /setmb") >= 0) {
       int endIdx = req.indexOf("&", idx + key.length());
       if (endIdx == -1) endIdx = req.indexOf(" ", idx + key.length());  // <- FIXED
       int val = req.substring(idx + key.length(), endIdx).toInt();
-      if (val >= 0 && val <= 125) {
-        modbusAddr[i] = val;
+      if (val >= 0) {
+        modbusAddr[i] = val - 1;
       }
     }
   }
@@ -195,8 +226,11 @@ if (req.indexOf("GET /setmb") >= 0) {
   client.println("Location: /");
   client.println("Connection: close\n");
   client.stop();
+  
+  delay(100);                 // Delay sebentar biar respon terkirim
+  softwareReset();            // Restart otomatis biar config baru aktif
   return;
-}
+  }
 
 
   if (req.indexOf("GET /value") >= 0) {
@@ -246,9 +280,9 @@ if (req.indexOf("GET /setmb") >= 0) {
 
   client.println(F("<h3>Modbus Address Setting</h3><form method='GET' action='/setmb'>"));
   for (int i = 0; i < 6; i++) {
-    client.print("CH "); client.print(i); client.print(": <input name='mb");
-    client.print(i); client.print("' value='"); client.print(modbusAddr[i]);
-    client.println("' type='number' min='0' max='125'><br>");
+    client.print("CH "); client.print(i + 1); client.print(": <input name='mb");
+    client.print(i); client.print("' value='"); client.print(modbusAddr[i]+1);
+    client.println("' type='number' min='0' max='9999'><br>");
   }
   client.println(F("<input type='submit' value='Save Modbus Address'></form><hr>"));
 
